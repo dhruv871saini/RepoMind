@@ -13,15 +13,7 @@ async def lifespan(app:FastAPI):
 
 app= FastAPI(
     title="GitRepo Chat API",
-    description="""
-RAG-powered GitHub repository chat.
- 
-Ingest any GitHub repo, then ask questions like:
-- "Why is the auth controller structured this way?"
-- "Which services use the email middleware?"
-- "How does the payment flow work end to end?"
-- "Where is the database connection initialized?"
-    """,
+    description="RAG-powered GitHub repository chat.",
     version="1.0.0",
     lifespan=lifespan,
 
