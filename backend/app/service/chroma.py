@@ -10,7 +10,6 @@ collection_name = "repo_mind"
 
 
 def sanitize_name(name: str) -> str:
-    """Replaces invalid ChromaDB characters (slashes, uppercase, spaces) with underscores."""
     return re.sub(r"[^a-z0-9_-]", "_", name.lower())
 
 
