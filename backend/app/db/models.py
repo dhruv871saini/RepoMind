@@ -86,7 +86,6 @@ class File(Base):
         UniqueConstraint('repo_id', 'file_path', name='uq_file_repo_path'),
     )
 
-
 class FileRelationship(Base):
     __tablename__ = 'file_relationships'
 
@@ -163,7 +162,7 @@ class Query(Base):
     vector_chunks_count = Column(Integer, default=0) # matched directly by ChromaDB
     graph_chunks_count  = Column(Integer, default=0) # added by graph expansion
 
-    status   = Column(String(20), default='completed')  # 'completed' | 'failed'
+    status   = Column(String(20), default='pending')  # 'completed' | 'failed'
     asked_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

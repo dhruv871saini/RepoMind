@@ -1,0 +1,19 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache and bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables (secrets/API keys)
+.env
+
+# IDE / OS specific files
+.DS_Store
+.vscode/
+.idea/

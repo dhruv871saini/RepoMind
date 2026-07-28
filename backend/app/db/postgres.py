@@ -11,7 +11,7 @@ sessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 base = declarative_base()
 
 def get_db():
-    db=sessionLocal
+    db=sessionLocal()
     try:
         print("db connection request by get_db")
         yield db
