@@ -15,6 +15,6 @@ def get_db():
     try:
         print("db connection request by get_db")
         yield db
-    finally:
+    finally: 
         print("db connection fail")
         db.close()

@@ -1,10 +1,12 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from service.chroma import init_chroma
-from db.postgres import base,engine
-
+from app.service.chroma import init_chroma
+from app.db.postgres import base,engine
+from app.route import clone
 @asynccontextmanager
 async def lifespan(app:FastAPI):
+
+    
     try:
         print("Connecting to chroma db...")
         init_chroma()
@@ -31,7 +33,7 @@ app= FastAPI(
 
 
 
-
+app.include_router(clone.router, prefix="/clone", tags=["clone"])
 @app.get("/health", tags=["Health"])
 def health():
     return {"status": "ok"}
