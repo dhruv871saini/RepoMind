@@ -1,39 +1,40 @@
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from app.service.chroma import init_chroma
-from app.db.postgres import base,engine
-from app.route import clone
-@asynccontextmanager
-async def lifespan(app:FastAPI):
 
-    
+from fastapi import FastAPI
+
+from app.db.models import Base
+from app.db.postgres import engine
+from app.route import ingest
+from app.service.chroma import init_chroma
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     try:
         print("Connecting to chroma db...")
         init_chroma()
 
         print("Connecting to PostgreSQL...")
-        base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
 
         print("db connection is done ")
-
-    except Exception as e :
+    except Exception as e:
         print("error in connectiion time of  db ")
         print(f"this is error in db connection {e}")
 
     yield
 
 
-app= FastAPI(
+app = FastAPI(
     title="GitRepo Chat API",
     description="RAG-powered GitHub repository chat.",
     version="1.0.0",
     lifespan=lifespan,
-
 )
 
+app.include_router(ingest.router)
 
 
-app.include_router(clone.router, prefix="/clone", tags=["clone"])
 @app.get("/health", tags=["Health"])
 def health():
     return {"status": "ok"}

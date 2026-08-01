@@ -1,20 +1,21 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker , declarative_base
+from sqlalchemy.orm import sessionmaker
+
+from app.db.models import Base
 from app.setting import settings
 
-db_url=settings.DATABASE_URL
+db_url = settings.DATABASE_URL
 
-engine =create_engine(db_url)
+engine = create_engine(db_url)
 
 sessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-base = declarative_base()
+base = Base
+
 
 def get_db():
-    db=sessionLocal()
+    db = sessionLocal()
     try:
-        print("db connection request by get_db")
         yield db
-    finally: 
-        print("db connection fail")
+    finally:
         db.close()
