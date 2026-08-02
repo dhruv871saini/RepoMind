@@ -1,6 +1,7 @@
 import re
 import chromadb
 from chromadb.config import Settings
+from app.setting import settings
 
 client = None
 _collection = None
@@ -13,16 +14,18 @@ def sanitize_name(name: str) -> str:
     return re.sub(r"[^a-z0-9_-]", "_", name.lower())
 
 
-def init_chroma(repoId: str):
+def init_chroma():
     global client
 
     print("Initiating Chroma DB...")
 
 
     client = chromadb.HttpClient(
-        host="localhost", port=8000, settings=Settings(anonymized_telemetry=False)
+        host=settings.CHROMA_HOST, port=settings.CHROMA_PORT, settings=Settings(anonymized_telemetry=False)
     )
+    client.heartbeat()
     
+    print("Successfully chroma DB")
     return client
 
 def create_collection(repo_id):
