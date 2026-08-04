@@ -21,6 +21,6 @@ def ingest(request: IngestRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     return {
-        "message": "Pass 1 complete: repository cloned and files recorded",
+        "message": "Ingest complete: cloned, parsed, related, and embedded",
         **result,
     }
