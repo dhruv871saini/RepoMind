@@ -45,6 +45,24 @@ def create_collection(repo_id):
 
 
 
+def reset_collection(repo_id: str):
+    """Drop and recreate the per-repo collection (idempotent re-ingest)."""
+    if client is None:
+        raise RuntimeError("client is not get show run the init_chroma() first!")
+
+    global _collection
+    safe_repo_id = sanitize_name(repo_id)
+    full_collection_name = f"{collection_name}_{safe_repo_id}"
+    try:
+        client.delete_collection(full_collection_name)
+    except Exception:
+        pass
+    _collection = client.get_or_create_collection(
+        name=full_collection_name, metadata=algorithm
+    )
+    return _collection
+
+
 def store_chunks(repo_id: str, chunks: list[dict]):
 
     if not chunks:

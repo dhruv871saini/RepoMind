@@ -1,10 +1,12 @@
+from datetime import datetime, timezone
+
 from app.db.models import Repository
 from app.ingestion.pass1_scanner import Pass1Scanner
-from app.service.clone import clone_repo, sanitize_repo_name
 from app.ingestion.pass2_scanner import Pass2Scanner
+from app.service.clone import clone_repo, sanitize_repo_name
+
 
 def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
-
     repo = db.query(Repository).filter(Repository.repo_url == repo_url).first()
     stage = "cloning"
 
@@ -22,6 +24,9 @@ def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
         repo.status = "cloning"
         repo.error_message = None
         repo.failed_stage = None
+        repo.done_chunks = 0
+        repo.total_chunks = 0
+        repo.chunk_count = 0
         db.commit()
 
     try:
@@ -43,9 +48,27 @@ def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
         repo.progress = 25
         db.commit()
 
-        result2=Pass2Scanner(repo_id=repo.id,repo_path=repo.repo_path,db_session=db)
-        result2.parse_and_chunks(result['file_id_map'])
-        print(f"result2==={result2}")
+        stage = "chunking"
+        repo.status = "chunking"
+        db.commit()
+
+        stage = "embedding"
+        repo.status = "embedding"
+        db.commit()
+
+        pass2 = Pass2Scanner(
+            repo_id=str(repo.id),
+            repo_path=repo_path,
+            db_session=db,
+        ).parse_and_chunks(result["file_id_map"])
+
+        repo.chunk_count = pass2["chunks_created"]
+        repo.total_chunks = pass2["chunks_created"]
+        repo.done_chunks = pass2["chunks_embedded"]
+        repo.progress = 100
+        repo.status = "ready"
+        repo.last_ingested_at = datetime.now(timezone.utc)
+        db.commit()
 
         return {
             "repo_id": str(repo.id),
@@ -55,6 +78,10 @@ def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
             "progress": repo.progress,
             "total_files": result["total_files"],
             "created_count": result["created_count"],
+            "chunks_created": pass2["chunks_created"],
+            "chunks_embedded": pass2["chunks_embedded"],
+            "relationships_created": pass2["relationships_created"],
+            "failed_files": pass2["failed_files"],
         }
     except Exception as e:
         repo.status = "failed"
