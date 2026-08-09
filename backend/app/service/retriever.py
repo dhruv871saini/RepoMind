@@ -13,6 +13,16 @@ from app.service.chroma import get_chunks_by_ids, search_chunks
 from app.service.embed import embed
 
 
+def _hit_label(hit: dict) -> str:
+    meta = hit.get("metadata") or {}
+    path = meta.get("file_path", "?")
+    name = meta.get("function_name") or "-"
+    score = hit.get("relevance_score")
+    src = hit.get("retrieval_source", "?")
+    score_s = f"{score}" if score is not None else "n/a"
+    return f"[{src}] {path} :: {name}  score={score_s}"
+
+
 def run_retriever(
     db: Session,
     *,
@@ -32,6 +42,12 @@ def run_retriever(
     if not question:
         raise ValueError("question is empty")
 
+    print("\n======== RETRIEVER START ========")
+    print(f"[input] repo_id={repo_id}")
+    print(f"[input] question={question!r}")
+    print(f"[input] k={k} expand_graph={expand_graph} max_graph_chunks={max_graph_chunks}")
+    print(f"[input] history_turns={len(history or [])}")
+
     try:
         repo_uuid = uuid.UUID(str(repo_id))
     except ValueError as e:
@@ -43,6 +59,8 @@ def run_retriever(
     if repo.status != "ready":
         raise RuntimeError(f"repository is not ready (status={repo.status})")
 
+    print(f"[repo] name={repo.repo_name} status={repo.status} chunks={repo.chunk_count}")
+
     query_row = Query(
         repo_id=repo.id,
         question=question,
@@ -50,9 +68,14 @@ def run_retriever(
     )
     db.add(query_row)
     db.flush()
+    print(f"[db] created Query id={query_row.id} status=pending")
 
     try:
+        print("[embed] embedding question...")
         query_embedding = embed(question)
+        print(f"[embed] done  dim={len(query_embedding)}")
+
+        print(f"[chroma] searching top-{max(1, k)}...")
         vector_hits = search_chunks(
             str(repo.id),
             query_embedding,
@@ -61,17 +84,37 @@ def run_retriever(
         for hit in vector_hits:
             hit["retrieval_source"] = "vector"
 
+        print(f"[chroma] got {len(vector_hits)} vector hits:")
+        for i, hit in enumerate(vector_hits, start=1):
+            print(f"  {i}. {_hit_label(hit)}")
+
         graph_hits: list[dict] = []
         if expand_graph and vector_hits:
+            print("[graph] expanding via FileRelationship...")
             graph_hits = _expand_via_graph(
                 db,
                 repo_id=repo.id,
                 vector_hits=vector_hits,
                 max_extra=max_graph_chunks,
             )
+            print(f"[graph] got {len(graph_hits)} extra chunks:")
+            for i, hit in enumerate(graph_hits, start=1):
+                print(f"  {i}. {_hit_label(hit)}")
+        elif not expand_graph:
+            print("[graph] skipped (expand_graph=false)")
+        else:
+            print("[graph] skipped (no vector hits)")
 
         contexts = _merge_contexts(vector_hits, graph_hits)
+        print(
+            f"[merge] contexts for LLM: {len(contexts)} "
+            f"(vector={len(vector_hits)} + graph={len(graph_hits)})"
+        )
+
+        print("[ask] sending question + contexts to Ollama...")
         answer = ask(question, contexts=contexts, history=history or [])
+        preview = answer if len(answer) <= 300 else answer[:300] + "..."
+        print(f"[ask] answer ({len(answer)} chars):\n{preview}")
 
         _persist_query_chunks(db, query_row, contexts)
 
@@ -84,6 +127,12 @@ def run_retriever(
         query_row.chunks_used = len(contexts)
         db.commit()
         db.refresh(query_row)
+
+        print(
+            f"[done] query_id={query_row.id} status=completed "
+            f"time={elapsed_ms}ms chunks_used={query_row.chunks_used}"
+        )
+        print("======== RETRIEVER END ========\n")
 
         return {
             "query_id": str(query_row.id),
@@ -105,10 +154,12 @@ def run_retriever(
                 for c in contexts
             ],
         }
-    except Exception:
+    except Exception as e:
         query_row.status = "failed"
         query_row.response_time_ms = int((time.perf_counter() - started) * 1000)
         db.commit()
+        print(f"[fail] query_id={query_row.id} error={e}")
+        print("======== RETRIEVER FAIL ========\n")
         raise
 
 
@@ -127,10 +178,12 @@ def _expand_via_graph(
         .all()
     )
     if not seed_chunks:
+        print("[graph] no postgres Chunk rows for vector hits")
         return []
 
     seed_file_ids = {c.file_id for c in seed_chunks}
     seed_chroma_ids = {c.chunk_id for c in seed_chunks}
+    print(f"[graph] seed files={len(seed_file_ids)} seed chunks={len(seed_chunks)}")
 
     rels = (
         db.query(FileRelationship)
@@ -144,6 +197,7 @@ def _expand_via_graph(
         .all()
     )
     if not rels:
+        print("[graph] no FileRelationship edges from seed files")
         return []
 
     related_file_ids: set = set()
@@ -151,6 +205,7 @@ def _expand_via_graph(
         related_file_ids.add(rel.source_file_id)
         related_file_ids.add(rel.target_file_id)
     related_file_ids -= seed_file_ids
+    print(f"[graph] relationships={len(rels)} related_files={len(related_file_ids)}")
     if not related_file_ids:
         return []
 
@@ -165,12 +220,13 @@ def _expand_via_graph(
         .all()
     )
     if not related_chunks:
+        print("[graph] related files have no extra chunks")
         return []
 
+    print(f"[graph] fetching {len(related_chunks)} chunk bodies from Chroma")
     fetched = get_chunks_by_ids(str(repo_id), [c.chunk_id for c in related_chunks])
     for hit in fetched:
         hit["retrieval_source"] = "graph"
-        # graph-added chunks have no vector score; keep explicit None
         hit.setdefault("relevance_score", None)
     return fetched
 
@@ -189,6 +245,7 @@ def _merge_contexts(vector_hits: list[dict], graph_hits: list[dict]) -> list[dic
 
 def _persist_query_chunks(db: Session, query_row: Query, contexts: list[dict]) -> None:
     if not contexts:
+        print("[db] no QueryChunk rows to save")
         return
 
     chroma_ids = [c["id"] for c in contexts]
@@ -199,9 +256,12 @@ def _persist_query_chunks(db: Session, query_row: Query, contexts: list[dict]) -
     )
     by_chroma = {row.chunk_id: row for row in rows}
 
+    saved = 0
+    missing = 0
     for ctx in contexts:
         pg_chunk = by_chroma.get(ctx["id"])
         if pg_chunk is None:
+            missing += 1
             continue
         db.add(
             QueryChunk(
@@ -211,3 +271,6 @@ def _persist_query_chunks(db: Session, query_row: Query, contexts: list[dict]) -
                 retrieval_source=ctx.get("retrieval_source") or "vector",
             )
         )
+        saved += 1
+
+    print(f"[db] saved QueryChunk rows={saved} missing_in_postgres={missing}")

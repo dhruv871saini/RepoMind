@@ -65,8 +65,14 @@ def ask(
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": user_prompt})
 
+    model_name = model or CHAT_MODEL
+    print(f"[ask] model={model_name} contexts={len(contexts or [])} history={len(history or [])}")
+    print(f"[ask] context chars={len(context_block)} prompt chars={len(user_prompt)}")
+
     response = ol.chat(
-        model=model or CHAT_MODEL,
+        model=model_name,
         messages=messages,
     )
-    return (response.get("message") or {}).get("content", "").strip()
+    answer = (response.get("message") or {}).get("content", "").strip()
+    print(f"[ask] ollama returned {len(answer)} chars")
+    return answer
