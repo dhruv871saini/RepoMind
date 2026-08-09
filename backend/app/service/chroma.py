@@ -75,3 +75,82 @@ def store_chunks(repo_id: str, chunks: list[dict]):
         documents=[c["content"] for c in chunks],
         metadatas=[c["metadata"] for c in chunks],
     )
+
+
+def search_chunks(
+    repo_id: str,
+    query_embedding: list[float],
+    n_results: int = 10,
+    where: dict | None = None,
+) -> list[dict]:
+    """
+    Vector search over a repo's Chroma collection.
+
+    Returns hits shaped for QueryChunk storage:
+      id, content, metadata, distance, relevance_score (0–100 cosine).
+    """
+    if not query_embedding:
+        return []
+
+    collection = create_collection(repo_id)
+    count = collection.count()
+    if count == 0:
+        return []
+
+    kwargs: dict = {
+        "query_embeddings": [query_embedding],
+        "n_results": min(n_results, count),
+        "include": ["documents", "metadatas", "distances"],
+    }
+    if where:
+        kwargs["where"] = where
+
+    result = collection.query(**kwargs)
+
+    ids = (result.get("ids") or [[]])[0]
+    documents = (result.get("documents") or [[]])[0]
+    metadatas = (result.get("metadatas") or [[]])[0]
+    distances = (result.get("distances") or [[]])[0]
+
+    hits: list[dict] = []
+    for chunk_id, document, metadata, distance in zip(
+        ids, documents, metadatas, distances
+    ):
+        # hnsw:space=cosine → distance is 1 - cosine_similarity
+        similarity = 1.0 - float(distance)
+        hits.append(
+            {
+                "id": chunk_id,
+                "content": document,
+                "metadata": metadata or {},
+                "distance": float(distance),
+                "relevance_score": round(max(0.0, min(1.0, similarity)) * 100, 2),
+            }
+        )
+    return hits
+
+
+def get_chunks_by_ids(repo_id: str, chunk_ids: list[str]) -> list[dict]:
+    """Fetch stored documents/metadatas by Chroma ids."""
+    if not chunk_ids:
+        return []
+
+    collection = create_collection(repo_id)
+    result = collection.get(
+        ids=chunk_ids,
+        include=["documents", "metadatas"],
+    )
+
+    ids = result.get("ids") or []
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+
+    return [
+        {
+            "id": chunk_id,
+            "content": document,
+            "metadata": metadata or {},
+            "relevance_score": None,
+        }
+        for chunk_id, document, metadata in zip(ids, documents, metadatas)
+    ]

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
+    OLLAMA_CHAT_MODEL: str = "llama3.2"
 
     model_config = SettingsConfigDict(
         env_file=".env",
