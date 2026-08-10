@@ -58,14 +58,23 @@ That “find first” step is what makes answers grounded in the real repo inste
         ├── PostgreSQL     metadata: repos, files, chunks, relationships, queries
         ├── ChromaDB       vectors + chunk text (per-repo collection)
         └── Ollama         embed model + chat model
-```
 
-```mermaid
-flowchart LR
-  Client([Client]) --> API[FastAPI]
-  API --> PG[(PostgreSQL)]
-  API --> CH[(ChromaDB)]
-  API --> OL[Ollama]
+
+   How they connect:
+
+        ┌────────┐
+        │ Client │
+        └───┬────┘
+            │  HTTP
+            ▼
+      ┌──────────┐
+      │  FastAPI │
+      └────┬─────┘
+           │
+     ┌─────┼──────────────┐
+     ▼     ▼              ▼
+ Postgres  ChromaDB     Ollama
+ (meta)    (vectors)    (embed+chat)
 ```
 
 ---
@@ -81,30 +90,29 @@ RepoMind
 │
 └── 2) ASK / RETRIEVE  (answer questions many times)
     └── embed question → search → expand graph → prompt LLM → save answer
-```
 
-```mermaid
-flowchart TB
-  subgraph INGEST["1) Ingest — build index"]
-    A[Clone repo] --> B[Pass1: list files]
-    B --> C[Pass2: parse functions]
-    C --> D[Split oversized functions]
-    D --> E[Embed each chunk]
-    E --> F[Store in Chroma + Postgres]
-    C --> G[Build import graph]
-    G --> F
-  end
 
-  subgraph ASK["2) Ask — use index"]
-    Q[User question] --> H[Embed question]
-    H --> I[Vector search top-k]
-    I --> J[Optional graph expand]
-    J --> K[Build prompt with code]
-    K --> L[Chat LLM answer]
-    L --> M[Save Query in Postgres]
-  end
-
-  F -.->|repo is ready| Q
+INGEST (build index)                    ASK (use index)
+────────────────────                    ────────────────
+Clone repo                              User question
+   │                                       │
+   ▼                                       ▼
+Pass1: list files                       Embed question
+   │                                       │
+   ▼                                       ▼
+Pass2: parse functions                  Vector search top-k
+   │                                       │
+   ├──────────────┐                        ▼
+   ▼              ▼                     Optional graph expand
+Split oversized  Build import              │
+functions        graph                     ▼
+   │              │                     Build prompt with code
+   ▼              │                        │
+Embed each chunk  │                        ▼
+   │              │                     Chat LLM answer
+   └──────┬───────┘                        │
+          ▼                                ▼
+ Store Chroma + Postgres  ····· ready ···► Save Query in Postgres
 ```
 
 ---
@@ -201,27 +209,29 @@ POST /retriver/
 └── Persist answer + which chunks were used → Query / QueryChunk
 ```
 
-```mermaid
-sequenceDiagram
-  participant U as Client
-  participant API as FastAPI /retriver
-  participant E as Ollama Embed
-  participant C as Chroma
-  participant DB as Postgres
-  participant L as Ollama Chat
+```text
+Sequence (who calls whom):
 
-  U->>API: question + repo_id
-  API->>DB: load repo, create Query
-  API->>E: embed(question)
-  E-->>API: query vector
-  API->>C: search top-k
-  C-->>API: similar chunks
-  API->>DB: graph expand via FileRelationship
-  DB-->>API: related chunks
-  API->>L: system + code context + question
-  L-->>API: answer
-  API->>DB: save answer + QueryChunk links
-  API-->>U: answer + contexts metadata
+ Client          FastAPI         Postgres        Chroma         Ollama
+   │                │               │               │              │
+   │  question      │               │               │              │
+   │───────────────►│               │               │              │
+   │                │ create Query  │               │              │
+   │                │──────────────►│               │              │
+   │                │ embed(question)───────────────┼─────────────►│
+   │                │◄──────────────┼───────────────┼── vector ────│
+   │                │ search top-k  │               │              │
+   │                │──────────────────────────────►│              │
+   │                │◄──────────── similar chunks ──│              │
+   │                │ graph expand  │               │              │
+   │                │──────────────►│               │              │
+   │                │◄── related ───│               │              │
+   │                │ get docs by id────────────────►│              │
+   │                │ ask(context+question)─────────┼─────────────►│
+   │                │◄──────────────┼───────────────┼── answer ────│
+   │                │ save answer + QueryChunk      │              │
+   │                │──────────────►│               │              │
+   │◄── response ───│               │               │              │
 ```
 
 ---
@@ -249,23 +259,26 @@ repositories
           │                             │
           └──1:N── query_chunks ────────┘
                    (query_id, chunk_id → chunks.id)
-```
 
-```mermaid
-erDiagram
-  repositories ||--o{ files : has
-  repositories ||--o{ queries : has
-  repositories ||--o{ chunks : has
-  repositories ||--o{ file_relationships : has
 
-  files ||--o{ chunks : contains
-  files ||--o{ file_relationships : "imports (source)"
-  files ||--o{ file_relationships : "imported_by (target)"
+Same ER as a box diagram:
 
-  queries ||--o{ query_chunks : used
-  chunks ||--o{ query_chunks : grounded_by
-
-  chunks ||--|| chroma_docs : "chunk_id = chroma id"
+  ┌──────────────── repositories ────────────────┐
+  │                                              │
+  │  ┌─ files ─────────────┐   ┌─ queries ─────┐ │
+  │  │                     │   │               │ │
+  │  │  chunks             │   │  query_chunks │ │
+  │  │    ▲                │   │       │       │ │
+  │  │    │ file_id        │   │       │       │ │
+  │  │    │                │   │       ▼       │ │
+  │  │  file_relationships │   │    chunks.id  │ │
+  │  │  (source ↔ target)  │   └───────────────┘ │
+  │  └─────────────────────┘                     │
+  │           │                                  │
+  │           │ chunks.chunk_id                  │
+  │           ▼                                  │
+  │      Chroma docs (vectors + code text)       │
+  └──────────────────────────────────────────────┘
 ```
 
 ### Connection table (who links to whom)
@@ -321,24 +334,39 @@ POST /retriver  (repo_id, question)
           UPDATE queries (answer, counts, timing, status=completed)
 ```
 
-```mermaid
-flowchart LR
-  Q[question] --> R[repositories]
-  R --> QC[queries INSERT]
-  Q --> V[Chroma vector search]
-  V -->|hit ids| C1[chunks seed]
-  C1 -->|file_id| F1[files seed]
-  F1 --> REL[file_relationships]
-  REL -->|neighbor file_id| F2[files related]
-  F2 --> C2[chunks related]
-  C2 -->|chunk_id| CH[Chroma get docs]
-  V --> MERGE[merge contexts]
-  CH --> MERGE
-  MERGE --> LLM[ask LLM]
-  LLM --> QC2[queries UPDATE]
-  MERGE --> QCH[query_chunks INSERT]
-  C1 --> QCH
-  C2 --> QCH
+```text
+Retriever walk (left → right):
+
+ question
+    │
+    ├──────────────────► repositories (must be ready)
+    │                         │
+    │                         ▼
+    │                    queries INSERT
+    │
+    └─► Chroma vector search ──hit ids──► chunks (seed)
+                                              │ file_id
+                                              ▼
+                                         files (seed)
+                                              │
+                                              ▼
+                                    file_relationships
+                                              │ neighbor file_id
+                                              ▼
+                                         files (related)
+                                              │
+                                              ▼
+                                         chunks (related)
+                                              │ chunk_id
+                                              ▼
+                                         Chroma get docs
+                                              │
+         vector hits ──────────────┐          │
+                                   ▼          ▼
+                              merge contexts ──► ask LLM
+                                   │               │
+                                   ▼               ▼
+                            query_chunks INSERT   queries UPDATE
 ```
 
 ### Tiny example (one question)
