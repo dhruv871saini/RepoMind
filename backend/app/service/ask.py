@@ -3,6 +3,9 @@ import ollama as ol
 from app.setting import settings
 
 CHAT_MODEL = settings.OLLAMA_CHAT_MODEL
+MAX_ASK_CONTEXT_CHARS = settings.MAX_ASK_CONTEXT_CHARS
+
+_client = ol.Client(host=settings.OLLAMA_BASE_URL)
 
 
 def _format_context(contexts: list[dict]) -> str:
@@ -10,6 +13,7 @@ def _format_context(contexts: list[dict]) -> str:
         return "(no code context found)"
 
     parts: list[str] = []
+    used = 0
     for i, ctx in enumerate(contexts, start=1):
         meta = ctx.get("metadata") or {}
         path = meta.get("file_path", "unknown")
@@ -24,7 +28,18 @@ def _format_context(contexts: list[dict]) -> str:
         if score is not None:
             header += f" score={score}"
         body = (ctx.get("content") or "").strip()
-        parts.append(f"{header}\n{body}")
+        block = f"{header}\n{body}"
+        # Keep highest-ranked contexts; stop before blowing chat context.
+        if parts and used + len(block) + 2 > MAX_ASK_CONTEXT_CHARS:
+            print(
+                f"[ask] context truncated after {len(parts)} chunks "
+                f"({used} chars, limit={MAX_ASK_CONTEXT_CHARS})"
+            )
+            break
+        if len(block) > MAX_ASK_CONTEXT_CHARS and not parts:
+            block = block[:MAX_ASK_CONTEXT_CHARS]
+        parts.append(block)
+        used += len(block) + 2
     return "\n\n".join(parts)
 
 
@@ -69,7 +84,7 @@ def ask(
     print(f"[ask] model={model_name} contexts={len(contexts or [])} history={len(history or [])}")
     print(f"[ask] context chars={len(context_block)} prompt chars={len(user_prompt)}")
 
-    response = ol.chat(
+    response = _client.chat(
         model=model_name,
         messages=messages,
     )
