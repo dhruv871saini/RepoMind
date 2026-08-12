@@ -18,6 +18,7 @@ def ingest(request: IngestRequest, db: Session = Depends(get_db)):
     try:
         result = ingest_repository(request.repo_url, db, force=request.force)
     except Exception as e:
+        print(f"here is end of ingest !!! fail ")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
     return {
