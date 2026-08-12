@@ -9,9 +9,31 @@ from app.db.models import Chunk, File, FileRelationship, Repository
 from app.files.dispatch import parse_file
 from app.files.resolve import resolve_import
 from app.service.chroma import reset_collection, store_chunks
-from app.service.embed import embed_texts
+from app.service.embed import (
+    MAX_EMBED_CHARS,
+    OVERLAP_CHARS,
+    embed_texts,
+    split_for_embed,
+)
 
-EMBED_BATCH = 32
+EMBED_BATCH = 10
+
+
+def _line_range_for_slice(
+    full: str,
+    start_char: int,
+    end_char: int,
+    *,
+    base_start_line: int,
+) -> tuple[int, int]:
+    """Map a char slice inside a function body to absolute file line numbers."""
+    start_char = max(0, min(start_char, len(full)))
+    end_char = max(start_char, min(end_char, len(full)))
+    lines_before = full.count("\n", 0, start_char)
+    lines_in_slice = full.count("\n", start_char, end_char)
+    start_line = base_start_line + lines_before
+    end_line = start_line + lines_in_slice
+    return start_line, end_line
 
 
 class Pass2Scanner:
@@ -53,40 +75,72 @@ class Pass2Scanner:
             file_record.exports = parsed["exports"] or []
 
             for fn in parsed["functions"]:
-                chunk_uuid = str(uuid.uuid4())
-                self.db.add(
-                    Chunk(
-                        repo_id=self.repo_id,
-                        file_id=file_record.id,
-                        chunk_id=chunk_uuid,
-                        function_name=fn["name"],
-                        start_line=fn["start_line"],
-                        end_line=fn["end_line"],
-                        chunk_type="function",
-                        detection_method=fn["detection_method"],
+                parts = split_for_embed(fn["content"])
+                if len(parts) > 1:
+                    print(
+                        f"[chunk] split {file_path}::{fn['name']} "
+                        f"into {len(parts)} parts ({len(fn['content'])} chars)"
                     )
-                )
-                chunks_created += 1
-                chroma_batch.append(
-                    {
-                        "id": chunk_uuid,
-                        "content": fn["content"],
-                        "metadata": {
-                            "repo_id": str(self.repo_id),
-                            "file_id": str(file_record.id),
-                            "file_path": file_path,
-                            "function_name": fn["name"],
-                            "start_line": fn["start_line"],
-                            "end_line": fn["end_line"],
-                            "chunk_type": "function",
-                            "layer": file_record.layer or "unknown",
-                        },
-                    }
-                )
 
-                if len(chroma_batch) >= EMBED_BATCH:
-                    chunks_embedded += self._flush_embeddings(chroma_batch)
-                    chroma_batch.clear()
+                # Track char offset so each part gets correct line numbers.
+                char_offset = 0
+                full = fn["content"] or ""
+
+                for part_idx, part in enumerate(parts):
+                    chunk_uuid = str(uuid.uuid4())
+                    detection = fn["detection_method"]
+                    if len(parts) > 1:
+                        detection = f"{detection}:part{part_idx + 1}/{len(parts)}"
+
+                    # Locate this part in the full function (overlap-aware).
+                    found_at = full.find(part, max(0, char_offset - OVERLAP_CHARS))
+                    if found_at < 0:
+                        found_at = char_offset
+                    part_start_line, part_end_line = _line_range_for_slice(
+                        full,
+                        found_at,
+                        found_at + len(part),
+                        base_start_line=fn["start_line"],
+                    )
+                    char_offset = found_at + max(1, len(part) - OVERLAP_CHARS)
+
+                    self.db.add(
+                        Chunk(
+                            repo_id=self.repo_id,
+                            file_id=file_record.id,
+                            chunk_id=chunk_uuid,
+                            function_name=fn["name"],
+                            start_line=part_start_line,
+                            end_line=part_end_line,
+                            chunk_type="function",
+                            detection_method=detection,
+                        )
+                    )
+                    chunks_created += 1
+                    # Store the same text we embed — every part is embedded, nothing dropped.
+                    chroma_batch.append(
+                        {
+                            "id": chunk_uuid,
+                            "content": part,
+                            "metadata": {
+                                "repo_id": str(self.repo_id),
+                                "file_id": str(file_record.id),
+                                "file_path": file_path,
+                                "function_name": fn["name"],
+                                "start_line": part_start_line,
+                                "end_line": part_end_line,
+                                "chunk_type": "function",
+                                "layer": file_record.layer or "unknown",
+                                "part_index": part_idx,
+                                "part_count": len(parts),
+                            },
+                        }
+                    )
+
+                    if len(chroma_batch) >= EMBED_BATCH:
+                        chunks_embedded += self._flush_embeddings(chroma_batch)
+                        print(f"chroma batch is here ===>{chunks_embedded}\n\n\n\n\n\n\n")
+                        chroma_batch.clear()
 
             for imp in parsed["imports"]:
                 pending_edges.append(
@@ -140,17 +194,36 @@ class Pass2Scanner:
             return None
 
     def _flush_embeddings(self, batch: list[dict]) -> int:
-        texts = [c["content"] for c in batch]
-        embeddings = embed_texts(texts)
-        payload = [
-            {
-                "id": c["id"],
-                "content": c["content"],
-                "embedding": emb,
-                "metadata": c["metadata"],
-            }
-            for c, emb in zip(batch, embeddings)
-        ]
+        payload: list[dict] = []
+        for c in batch:
+            try:
+                emb = embed_texts([c["content"]])[0]
+            except Exception as e:
+                # Last resort: hard-truncate and retry once; otherwise skip chunk.
+                short = (c["content"] or "")[: max(1000, MAX_EMBED_CHARS // 2)]
+                print(
+                    f"[embed] failed id={c['id']} chars={len(c.get('content') or '')} "
+                    f"err={e}; retrying with {len(short)} chars"
+                )
+                try:
+                    emb = embed_texts([short])[0]
+                    c = {**c, "content": short}
+                except Exception as e2:
+                    print(f"[embed] skip id={c['id']} err={e2}")
+                    continue
+
+            payload.append(
+                {
+                    "id": c["id"],
+                    "content": c["content"],
+                    "embedding": emb,
+                    "metadata": c["metadata"],
+                }
+            )
+
+        if not payload:
+            return 0
+
         store_chunks(str(self.repo_id), payload)
 
         repo = self.db.query(Repository).filter(Repository.id == self.repo_id).first()
