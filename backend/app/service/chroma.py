@@ -46,7 +46,6 @@ def create_collection(repo_id):
 
 
 def reset_collection(repo_id: str):
-    """Drop and recreate the per-repo collection (idempotent re-ingest)."""
     if client is None:
         raise RuntimeError("client is not get show run the init_chroma() first!")
 
@@ -83,12 +82,6 @@ def search_chunks(
     n_results: int = 10,
     where: dict | None = None,
 ) -> list[dict]:
-    """
-    Vector search over a repo's Chroma collection.
-
-    Returns hits shaped for QueryChunk storage:
-      id, content, metadata, distance, relevance_score (0–100 cosine).
-    """
     if not query_embedding:
         return []
 
@@ -131,7 +124,6 @@ def search_chunks(
 
 
 def get_chunks_by_ids(repo_id: str, chunk_ids: list[str]) -> list[dict]:
-    """Fetch stored documents/metadatas by Chroma ids."""
     if not chunk_ids:
         return []
 

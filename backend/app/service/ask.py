@@ -29,7 +29,6 @@ def _format_context(contexts: list[dict]) -> str:
             header += f" score={score}"
         body = (ctx.get("content") or "").strip()
         block = f"{header}\n{body}"
-        # Keep highest-ranked contexts; stop before blowing chat context.
         if parts and used + len(block) + 2 > MAX_ASK_CONTEXT_CHARS:
             print(
                 f"[ask] context truncated after {len(parts)} chunks "
@@ -49,12 +48,6 @@ def ask(
     history: list[dict] | None = None,
     model: str | None = None,
 ) -> str:
-    """
-    Ask Ollama a question grounded in retrieved code chunks.
-
-    contexts: hits from search_chunks (id, content, metadata, relevance_score)
-    history:  optional prior chat turns [{"role": "user"|"assistant", "content": "..."}]
-    """
     question = (question or "").strip()
     if not question:
         raise ValueError("question is empty")

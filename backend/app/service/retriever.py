@@ -33,10 +33,6 @@ def run_retriever(
     expand_graph: bool = True,
     max_graph_chunks: int = 20,
 ) -> dict[str, Any]:
-    """
-    Full RAG flow:
-      validate repo → embed → Chroma search → optional graph expand → ask → persist
-    """
     started = time.perf_counter()
     question = (question or "").strip()
     if not question:
@@ -170,7 +166,6 @@ def _expand_via_graph(
     vector_hits: list[dict],
     max_extra: int,
 ) -> list[dict]:
-    """Pull chunks from files connected via FileRelationship to vector-hit files."""
     chroma_ids = [h["id"] for h in vector_hits]
     seed_chunks = (
         db.query(Chunk)
