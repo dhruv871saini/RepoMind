@@ -17,7 +17,7 @@ class Repository(Base):
     repo_url     = Column(String, unique=True, nullable=False)
     repo_name    = Column(String, nullable=False)
     repo_path    = Column(String, nullable=False)
-
+    last_commit_sha  = Column(String(40)) 
     status        = Column(String(20), nullable=False, default='pending')
     progress      = Column(Integer, default=0)
     total_chunks  = Column(Integer, default=0)
