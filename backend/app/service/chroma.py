@@ -146,3 +146,11 @@ def get_chunks_by_ids(repo_id: str, chunk_ids: list[str]) -> list[dict]:
         }
         for chunk_id, document, metadata in zip(ids, documents, metadatas)
     ]
+def delete_chunks_by_ids(repo_id: str, chunk_ids: list[str]) -> None:
+
+    if not chunk_ids:
+        return
+
+    collection = create_collection(repo_id)
+    collection.delete(ids=chunk_ids)
+    print(f"[chroma] deleted {len(chunk_ids)} chunks for repo {repo_id[:8]}")
