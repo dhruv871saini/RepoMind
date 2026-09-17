@@ -276,3 +276,128 @@ class Pass2Scanner:
             )
             created += 1
         return created
+
+
+    def reprocess_files(self, file_paths: set[str], file_id_map: dict) -> dict:
+
+        file_id_map = {str(k): v for k, v in file_id_map.items()}
+
+        failed_files = []
+        pending_edges = []
+        chroma_batch = []
+        chunks_created = 0
+        chunks_embedded = 0
+
+        files = self.db.query(File).filter(
+            File.repo_id == self.repo_id,
+            File.file_path.in_(file_paths)        #   only changed files
+        ).all()
+
+        for file_record in files:
+            file_path = file_record.file_path
+            full_path = self.repo_path / file_path
+
+            content = self._read_file(full_path)
+            if content is None:
+                failed_files.append(file_path)
+                continue
+
+            lang, parsed = parse_file(content, file_path)
+            if lang is None:
+                continue
+
+            file_record.exports = parsed["exports"] or []
+
+            for fn in parsed["functions"]:
+                parts = split_for_embed(fn["content"])
+                if len(parts) > 1:
+                    print(
+                        f"[chunk] split {file_path}::{fn['name']} "
+                        f"into {len(parts)} parts ({len(fn['content'])} chars)"
+                    )
+
+                # Track char offset so each part gets correct line numbers.
+                char_offset = 0
+                full = fn["content"] or ""
+
+                for part_idx, part in enumerate(parts):
+                    chunk_uuid = str(uuid.uuid4())
+                    detection = fn["detection_method"]
+                    if len(parts) > 1:
+                        detection = f"{detection}:part{part_idx + 1}/{len(parts)}"
+
+                    # Locate this part in the full function (overlap-aware).
+                    found_at = full.find(part, max(0, char_offset - OVERLAP_CHARS))
+                    if found_at < 0:
+                        found_at = char_offset
+                    part_start_line, part_end_line = _line_range_for_slice(
+                        full,
+                        found_at,
+                        found_at + len(part),
+                        base_start_line=fn["start_line"],
+                    )
+                    char_offset = found_at + max(1, len(part) - OVERLAP_CHARS)
+
+                    self.db.add(
+                        Chunk(
+                            repo_id=self.repo_id,
+                            file_id=file_record.id,
+                            chunk_id=chunk_uuid,
+                            function_name=fn["name"],
+                            start_line=part_start_line,
+                            end_line=part_end_line,
+                            chunk_type="function",
+                            detection_method=detection,
+                        )
+                    )
+                    chunks_created += 1
+                    chroma_batch.append(
+                        {
+                            "id": chunk_uuid,
+                            "content": part,
+                            "metadata": {
+                                "repo_id": str(self.repo_id),
+                                "file_id": str(file_record.id),
+                                "file_path": file_path,
+                                "function_name": fn["name"],
+                                "start_line": part_start_line,
+                                "end_line": part_end_line,
+                                "chunk_type": "function",
+                                "layer": file_record.layer or "unknown",
+                                "part_index": part_idx,
+                                "part_count": len(parts),
+                            },
+                        }
+                    )
+
+                    if len(chroma_batch) >= EMBED_BATCH:
+                        chunks_embedded += self._flush_embeddings(chroma_batch)
+                        print(f"chroma batch is here ===>{chunks_embedded}\n\n\n\n\n\n\n")
+                        chroma_batch.clear()
+
+            for imp in parsed["imports"]:
+                pending_edges.append(
+                    {
+                        "source_file_id": file_record.id,
+                        "source_path": file_path,
+                        "raw": imp["raw"],
+                        "names": imp["names"],
+                        "lang": lang,
+                    }
+                )
+
+            if chunks_created and chunks_created % 100 == 0:
+                self.db.commit()
+        
+        if chroma_batch:
+            chunks_embedded += self._flush_embeddings(chroma_batch)
+
+        relationships_created = self._write_relationships(pending_edges, file_id_map)
+        self.db.commit()
+
+        return {
+            "chunks_created": chunks_created,
+            "chunks_embedded": chunks_embedded,
+            "relationships_created": relationships_created,
+            "failed_files": failed_files,
+        }
