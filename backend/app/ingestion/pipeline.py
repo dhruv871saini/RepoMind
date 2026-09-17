@@ -4,12 +4,13 @@ from app.db.models import Repository
 from app.ingestion.pass1_scanner import Pass1Scanner
 from app.ingestion.pass2_scanner import Pass2Scanner
 from app.service.clone import clone_repo, sanitize_repo_name
-
+from app.ingestion.sync_tunnel import run_incremental_sync
 
 def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
+    print("start ingest repo")
     repo = db.query(Repository).filter(Repository.repo_url == repo_url).first()
     stage = "cloning"
-
+    print ("repo is not or yes")
     if repo is None:
         repo = Repository(
             repo_url=repo_url,
@@ -30,7 +31,12 @@ def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
         db.commit()
 
     try:
-        repo_path = clone_repo(repo_url, force=force)
+        print("cloning repo start")
+        data = clone_repo(repo_url, force=force)
+        repo_path= data["repo_path"]
+        if not data["is_fresh_clone"]:
+            run_incremental_sync(repo,repo_path,data["added"],data["modified"],data["deleted"],data["new_sha"],db)
+            return
         repo.repo_path = repo_path
         repo.repo_name = sanitize_repo_name(repo_url)
 
