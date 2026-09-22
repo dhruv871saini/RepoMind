@@ -35,7 +35,7 @@ class Pass1Scanner:
             file_record = File(
                 repo_id=self.repo_id,
                 file_path=str(file_path),
-                layer=self._detect_layer(str(file_path))
+                layer=self.detect_layer(str(file_path))
             )
             self.db.add(file_record)
             self.db.flush()
@@ -55,10 +55,11 @@ class Pass1Scanner:
             'created_count': created_count,
             'file_id_map': file_id_map
         }
-    
-    def _detect_layer(self, file_path: str) -> str:
+
+    @staticmethod
+    def detect_layer(file_path: str) -> str:
         path_lower = file_path.lower()
-        
+
         if 'controller' in path_lower or 'handlers' in path_lower:
             return 'controller'
         elif 'service' in path_lower:

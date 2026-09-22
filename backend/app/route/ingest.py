@@ -21,7 +21,13 @@ def ingest(request: IngestRequest, db: Session = Depends(get_db)):
         print(f"here is end of ingest !!! fail ")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+    state = result.get("state", "fresh")
+    messages = {
+        "fresh": "Ingest complete: cloned, parsed, related, and embedded",
+        "up_to_date": "Repo already up to date — nothing to do",
+        "changed": "Incremental sync complete: updated changed files",
+    }
     return {
-        "message": "Ingest complete: cloned, parsed, related, and embedded",
+        "message": messages.get(state, "Ingest complete"),
         **result,
     }

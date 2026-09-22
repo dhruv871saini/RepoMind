@@ -6,11 +6,12 @@ from app.ingestion.pass2_scanner import Pass2Scanner
 from app.service.clone import clone_repo, sanitize_repo_name
 from app.ingestion.sync_tunnel import run_incremental_sync
 
+
 def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
     print("start ingest repo")
     repo = db.query(Repository).filter(Repository.repo_url == repo_url).first()
     stage = "cloning"
-    print ("repo is not or yes")
+
     if repo is None:
         repo = Repository(
             repo_url=repo_url,
@@ -25,21 +26,44 @@ def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
         repo.status = "cloning"
         repo.error_message = None
         repo.failed_stage = None
-        repo.done_chunks = 0
-        repo.total_chunks = 0
-        repo.chunk_count = 0
         db.commit()
 
     try:
         print("cloning repo start")
         data = clone_repo(repo_url, force=force)
-        repo_path= data["repo_path"]
-        if not data["is_fresh_clone"]:
-            run_incremental_sync(repo,repo_path,data["added"],data["modified"],data["deleted"],data["new_sha"],db)
-            return
+        repo_path = data["repo_path"]
+        state = data["state"]
+
         repo.repo_path = repo_path
         repo.repo_name = sanitize_repo_name(repo_url)
 
+        if state == "up_to_date":
+            repo.status = "ready"
+            db.commit()
+            return {
+                "repo_id": str(repo.id),
+                "repo_name": repo.repo_name,
+                "repo_path": repo_path,
+                "status": "up_to_date",
+                "state": "up_to_date",
+                "new_sha": data["new_sha"],
+            }
+
+        if state == "changed":
+            stage = "syncing"
+            repo.status = "syncing"
+            db.commit()
+            return run_incremental_sync(
+                repo,
+                repo_path,
+                data["added"],
+                data["modified"],
+                data["deleted"],
+                data["new_sha"],
+                db,
+            )
+
+        # state == "fresh" → full Pass1 + Pass2
         stage = "walking"
         repo.status = "walking"
         db.commit()
@@ -73,6 +97,7 @@ def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
         repo.done_chunks = pass2["chunks_embedded"]
         repo.progress = 100
         repo.status = "ready"
+        repo.last_commit_sha = data["new_sha"]
         repo.last_ingested_at = datetime.now(timezone.utc)
         db.commit()
 
@@ -81,7 +106,9 @@ def ingest_repository(repo_url: str, db, force: bool = False) -> dict:
             "repo_name": repo.repo_name,
             "repo_path": repo_path,
             "status": repo.status,
+            "state": "fresh",
             "progress": repo.progress,
+            "new_sha": data["new_sha"],
             "total_files": result["total_files"],
             "created_count": result["created_count"],
             "chunks_created": pass2["chunks_created"],
