@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from app.db.models import Base
 from app.db.postgres import engine
-from app.route import ingest, retriver
+from app.route import ingest, retriver ,repo
 from app.service.chroma import init_chroma
 
 
@@ -34,6 +34,7 @@ app = FastAPI(
 
 app.include_router(ingest.router)
 app.include_router(retriver.router)
+app.include_router(repo.router)
 
 
 @app.get("/health", tags=["Health"])
