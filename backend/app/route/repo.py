@@ -1,46 +1,58 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+import logging
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete
-from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
 from app.db.models import Repository
 from app.db.postgres import get_db
 
-router = APIRouter(prefix="/repo",tags=["repo"])
+logger = logging.getLogger(__name__)
 
-@router.get('/')
-def getRepo(db:Session=Depends(get_db)):
+router = APIRouter(prefix="/repo", tags=["repo"])
+
+
+@router.get("/")
+def get_repositories(db: Session = Depends(get_db)):
     try:
-        print()
         data = db.query(Repository).all()
-        db.commit()
-        return {
-            "data": data
-        }
+        return {"data": data}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to fetch repositories")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch repositories",
+        ) from exc
 
-    except Exception as e :
-        print(f"there is getting issue ==> {e}") 
-        raise HTTPException(status_code=500,detail=str(e))
-    
 
-@router.delete('/{id}')
-def deleteRepo(id:str,db:Session=Depends(get_db)):
+@router.delete("/{repo_id}")
+def delete_repository(repo_id: UUID, db: Session = Depends(get_db)):
     try:
         result = db.execute(
-            delete(Repository).where(Repository.id == id)
+            delete(Repository).where(Repository.id == repo_id)
         )
 
         if result.rowcount == 0:
             raise HTTPException(
-                status_code=404,
-                detail="Repository not found"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found",
             )
 
         db.commit()
-
         return {
             "message": "Repository deleted successfully",
-            "id": id
+            "id": str(repo_id),
         }
-    except Exception as e:
-        print(f"there is delete issue ==> {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        db.rollback()
+        raise
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Failed to delete repository %s", repo_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete repository",
+        ) from exc
